@@ -31,7 +31,7 @@ export interface ChatConnection {
 
 export async function connectChat(
   channelId: string,
-  onChat: (viewer: Viewer) => void,
+  onChat: (viewer: Viewer, message: string) => void,
   onStatus: (status: "connected" | "error") => void
 ): Promise<ChatConnection> {
   const client = new ChzzkChat({
@@ -41,7 +41,9 @@ export async function connectChat(
   });
 
   client.on("connect", () => onStatus("connected"));
-  client.on("chat", (chat) => onChat(profileToViewer(chat.profile)));
+  client.on("chat", (chat) =>
+    onChat(profileToViewer(chat.profile), chat.message)
+  );
 
   try {
     await client.connect();

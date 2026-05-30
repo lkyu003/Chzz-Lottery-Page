@@ -2,9 +2,16 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { connectChat, type ChatConnection } from "./lib/chat";
 import { findChannel } from "./lib/channel";
 import { drawViewer, selectEligibleViewers } from "./lib/draw";
+import { getSystemVoices, speakMessage, stopSpeaking } from "./lib/speech";
 import type { Channel, DrawOptions, DrawResult, Viewer } from "./types";
 
 const CHANNEL_STORAGE_KEY = "fair-chzzk-draw-channel";
+const TTS_STORAGE_KEY = "fair-chzzk-draw-tts";
+
+interface TtsSettings {
+  enabled: boolean;
+  voiceName: string;
+}
 
 type Screen = "ready" | "collecting" | "completed";
 type ChatStatus = "idle" | "connecting" | "connected" | "error";
@@ -19,6 +26,17 @@ function readStoredChannel(): Channel | null {
     return stored ? (JSON.parse(stored) as Channel) : null;
   } catch {
     return null;
+  }
+}
+
+function readStoredTtsSettings(): TtsSettings {
+  try {
+    const stored = localStorage.getItem(TTS_STORAGE_KEY);
+    return stored
+      ? (JSON.parse(stored) as TtsSettings)
+      : { enabled: true, voiceName: "" };
+  } catch {
+    return { enabled: true, voiceName: "" };
   }
 }
 
@@ -130,6 +148,9 @@ function DrawApp({
   const [remainingSeconds, setRemainingSeconds] = useState<number | null>(null);
   const [chatStatus, setChatStatus] = useState<ChatStatus>("idle");
   const [notice, setNotice] = useState("");
+  const [ttsSettings, setTtsSettings] =
+    useState<TtsSettings>(readStoredTtsSettings);
+  const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
   const participantMapRef = useRef(new Map<string, Viewer>());
   const flushTimeoutRef = useRef<number | null>(null);
   const connectionRef = useRef<ChatConnection | null>(null);
@@ -171,7 +192,7 @@ function DrawApp({
     try {
       connectionRef.current = await connectChat(
         channel.channelId,
-        addParticipant,
+        (viewer) => addParticipant(viewer),
         (status) => setChatStatus(status)
       );
     } catch {
@@ -227,6 +248,14 @@ function DrawApp({
     );
     return () => window.clearTimeout(timer);
   }, [remainingSeconds, screen]);
+
+  useEffect(() => {
+    void getSystemVoices().then(setVoices);
+  }, []);
+
+  useEffect(() => {
+    localStorage.setItem(TTS_STORAGE_KEY, JSON.stringify(ttsSettings));
+  }, [ttsSettings]);
 
   useEffect(() => {
     return () => {
@@ -343,6 +372,11 @@ function DrawApp({
               </div>
             ) : null}
           </div>
+          <TtsControls
+            settings={ttsSettings}
+            voices={voices}
+            onChange={setTtsSettings}
+          />
         </section>
 
         {remainingSeconds !== null ? (
@@ -421,8 +455,66 @@ function DrawApp({
       </main>
 
       {slotOpen && result ? (
-        <SlotModal result={result} onClose={() => setSlotOpen(false)} />
+        <SlotModal
+          channelId={channel.channelId}
+          result={result}
+          ttsSettings={ttsSettings}
+          onClose={() => setSlotOpen(false)}
+        />
       ) : null}
+    </div>
+  );
+}
+
+function TtsControls({
+  settings,
+  voices,
+  onChange,
+}: {
+  settings: TtsSettings;
+  voices: SpeechSynthesisVoice[];
+  onChange: (settings: TtsSettings) => void;
+}) {
+  const koreanVoices = voices.filter((voice) => voice.lang === "ko-KR");
+  const selectableVoices = koreanVoices.length > 0 ? koreanVoices : voices;
+
+  return (
+    <div className="tts-controls">
+      <div>
+        <strong>당첨자 채팅 TTS</strong>
+        <p className="small muted">
+          당첨자가 입력한 채팅을 결과 창에서 읽어줍니다.
+        </p>
+      </div>
+      <Toggle
+        label="TTS 사용"
+        checked={settings.enabled}
+        onChange={() => onChange({ ...settings, enabled: !settings.enabled })}
+      />
+      <select
+        aria-label="TTS 음성"
+        disabled={!settings.enabled || selectableVoices.length === 0}
+        value={settings.voiceName}
+        onChange={(event) =>
+          onChange({ ...settings, voiceName: event.target.value })
+        }
+      >
+        <option value="">한국어 기본 음성</option>
+        {selectableVoices.map((voice) => (
+          <option key={voice.voiceURI} value={voice.name}>
+            {voice.name} ({voice.lang})
+          </option>
+        ))}
+      </select>
+      <button
+        className="text-button tts-test"
+        disabled={!settings.enabled}
+        onClick={() =>
+          void speakMessage(settings.voiceName, "TTS 음성 테스트입니다.")
+        }
+      >
+        음성 테스트
+      </button>
     </div>
   );
 }
@@ -478,10 +570,14 @@ function ViewerChip({
 }
 
 function SlotModal({
+  channelId,
   result,
+  ttsSettings,
   onClose,
 }: {
+  channelId: string;
   result: DrawResult;
+  ttsSettings: TtsSettings;
   onClose: () => void;
 }) {
   const animationList = useMemo(() => {
@@ -492,11 +588,51 @@ function SlotModal({
     ];
   }, [result]);
   const [complete, setComplete] = useState(false);
+  const [messages, setMessages] = useState<string[]>([]);
+  const [winnerChatStatus, setWinnerChatStatus] =
+    useState<ChatStatus>("connecting");
 
   useEffect(() => {
     const timer = window.setTimeout(() => setComplete(true), 2_800);
     return () => window.clearTimeout(timer);
   }, []);
+
+  useEffect(() => {
+    if (!complete) return;
+
+    let active = true;
+    let connection: ChatConnection | null = null;
+
+    void connectChat(
+      channelId,
+      (viewer, message) => {
+        if (!active || viewer.userIdHash !== result.winner.userIdHash) return;
+        setMessages((current) => [...current, message]);
+        if (ttsSettings.enabled) {
+          void speakMessage(ttsSettings.voiceName, message);
+        }
+      },
+      (status) => {
+        if (active) setWinnerChatStatus(status);
+      }
+    )
+      .then((nextConnection) => {
+        if (!active) {
+          nextConnection.disconnect();
+          return;
+        }
+        connection = nextConnection;
+      })
+      .catch(() => {
+        if (active) setWinnerChatStatus("error");
+      });
+
+    return () => {
+      active = false;
+      connection?.disconnect();
+      stopSpeaking();
+    };
+  }, [channelId, complete, result.winner.userIdHash, ttsSettings]);
 
   return (
     <div className="modal-backdrop">
@@ -519,6 +655,25 @@ function SlotModal({
             <p className="eyebrow">WINNER</p>
             <h2>{result.winner.nickname}</h2>
             <p>후보 {result.candidates.length}명 중 추첨되었습니다.</p>
+            <div className="winner-chat">
+              <div className="winner-chat-title">
+                <strong>당첨자 채팅</strong>
+                <Status status={winnerChatStatus} />
+              </div>
+              <div className="winner-chat-messages">
+                {messages.length === 0 ? (
+                  <p className="small muted">
+                    당첨자가 채팅을 입력하면 이곳에 표시되고 TTS로 재생됩니다.
+                  </p>
+                ) : (
+                  messages.map((message, index) => (
+                    <p className="chat-balloon" key={`${index}-${message}`}>
+                      {message}
+                    </p>
+                  ))
+                )}
+              </div>
+            </div>
             <button className="primary large" onClick={onClose}>
               닫기
             </button>
