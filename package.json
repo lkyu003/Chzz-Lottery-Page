@@ -6,10 +6,11 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "cloudflare:build": "npm run build",
     "preview": "vite preview",
     "test": "vitest run",
-    "pages:dev": "wrangler pages dev dist",
-    "deploy": "npm run build && wrangler pages deploy dist"
+    "dev:pages": "npm run build && wrangler pages dev dist",
+    "deploy:pages": "npm run build && wrangler pages deploy dist"
   },
   "dependencies": {
     "@vitejs/plugin-react": "^4.3.4",
