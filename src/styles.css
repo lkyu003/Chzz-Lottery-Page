@@ -112,7 +112,8 @@ header { border-bottom: 1px solid #ffffff12; background: #141719cc; backdrop-fil
 
 .roulette-modal { position: relative; width: min(760px, 100%); min-height: 560px; display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 18px; padding: 30px; border: 1px solid #00ffa344; border-radius: 22px; background: radial-gradient(circle at 50% 35%, #1f3430, #15191b 58%); box-shadow: 0 0 90px #00ffa31f; text-align: center; overflow: hidden; }
 .roulette-wheel-area { display: flex; flex-direction: column; align-items: center; justify-content: center; }
-.roulette-pointer { width: 0; height: 0; margin-bottom: -18px; border-inline: 18px solid transparent; border-top: 32px solid #00ffa3; border-bottom: 0; filter: drop-shadow(0 0 12px #00ffa399); z-index: 2; }
+.roulette-pointer-label { z-index: 2; display: flex; flex-direction: column; align-items: center; gap: 4px; margin-bottom: -18px; color: #00ffa3; font-size: 16px; font-weight: 1000; text-shadow: 0 0 14px #00ffa366; }
+.roulette-pointer { display: block; width: 0; height: 0; border-inline: 18px solid transparent; border-top: 32px solid #00ffa3; border-bottom: 0; filter: drop-shadow(0 0 12px #00ffa399); }
 .roulette-wheel-wrap { position: relative; width: min(380px, 82vw); aspect-ratio: 1; display: grid; place-items: center; border: 10px solid #101416; border-radius: 50%; background: #101416; box-shadow: inset 0 0 0 3px #00ffa355, 0 0 45px #00ffa324; }
 .roulette-wheel { position: absolute; inset: 0; border-radius: 50%; overflow: hidden; background: #18201f; transition: transform .35s ease; }
 .roulette-wheel.spinning { animation: roulette-spin 3.6s cubic-bezier(.09,.74,.08,1) forwards; }

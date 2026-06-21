@@ -1149,7 +1149,10 @@ function VoteRouletteWheel({
 
   return (
     <div className="roulette-wheel-area">
-      <div className="roulette-pointer" />
+      <div className="roulette-pointer-label">
+        <span>당첨</span>
+        <i className="roulette-pointer" />
+      </div>
       <div className="roulette-wheel-wrap">
         <div
           className={`roulette-wheel ${spinning ? "spinning" : ""}`}
@@ -1271,13 +1274,11 @@ function VoteRouletteModal({
       <section className={`roulette-modal ${complete ? "complete" : ""}`}>
         {!complete ? (
           <>
-            <p className="eyebrow">FAIR ROULETTE</p>
             <VoteRouletteWheel
               options={result.shuffledCandidates}
               spinning
               winnerId={result.winner.id}
             />
-            <p className="muted">CSPRNG + Fisher-Yates로 당첨 후보를 먼저 공정하게 확정합니다.</p>
           </>
         ) : (
           <div className="roulette-winner">
