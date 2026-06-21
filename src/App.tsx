@@ -1071,7 +1071,7 @@ function VoteRouletteWheel({
   winnerId?: string;
 }) {
   const [selectedOptionId, setSelectedOptionId] = useState<string | null>(null);
-  const wheelItems = options.slice(0, 16);
+  const wheelItems = options;
   const selectedOption =
     wheelItems.find((option) => option.id === selectedOptionId) ?? null;
   const radius = 170;
@@ -1083,6 +1083,8 @@ function VoteRouletteWheel({
   const sliceAngle = wheelItems.length > 0 ? 360 / wheelItems.length : 0;
   const winnerCenterAngle = winnerIndex * sliceAngle + sliceAngle / 2;
   const spinDegrees = 360 * 6 - winnerCenterAngle;
+  const labelFontSize = Math.max(7, Math.min(15, 280 / Math.max(1, wheelItems.length)));
+  const labelRadius = wheelItems.length > 24 ? radius * 0.72 : radius * 0.62;
 
   useEffect(() => {
     if (
@@ -1132,9 +1134,10 @@ function VoteRouletteWheel({
                 const labelPosition = polarToCartesian(
                   center,
                   center,
-                  radius * 0.62,
+                  labelRadius,
                   labelAngle
                 );
+                const isSingleOption = wheelItems.length === 1;
 
                 function toggleOption() {
                   if (spinning) return;
@@ -1162,7 +1165,11 @@ function VoteRouletteWheel({
                         className={`roulette-slice ${
                           selectedOptionId === option.id ? "selected" : ""
                         }`}
-                        d={describeSlice(startAngle, endAngle)}
+                        d={
+                          isSingleOption
+                            ? `M ${center} ${center - radius} A ${radius} ${radius} 0 1 1 ${center - 0.1} ${center - radius} Z`
+                            : describeSlice(startAngle, endAngle)
+                        }
                         style={{
                           fill: `hsl(${(index * 47) % 360} 76% 42%)`,
                         }}
@@ -1172,6 +1179,7 @@ function VoteRouletteWheel({
                       x={labelPosition.x}
                       y={labelPosition.y}
                       transform={`rotate(${labelAngle} ${labelPosition.x} ${labelPosition.y})`}
+                      style={{ fontSize: labelFontSize }}
                     >
                       {option.label}
                     </text>
