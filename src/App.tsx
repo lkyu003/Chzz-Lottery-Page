@@ -31,10 +31,19 @@ interface TtsSettings {
 
 type Screen = "ready" | "collecting" | "completed";
 type ChatStatus = "idle" | "connecting" | "connected" | "error";
-type AppTabId = "viewer-draw" | "free-vote-roulette" | "donation-vote-roulette";
+type AppTabId =
+  | "viewer-draw"
+  | "number-vote"
+  | "free-vote-roulette"
+  | "donation-vote-roulette";
 type ViewerVote = {
   optionId: string;
   viewer: Viewer;
+};
+type NumberVoteOption = {
+  id: number;
+  name: string;
+  voters: Viewer[];
 };
 
 const APP_TABS: Array<{
@@ -43,9 +52,14 @@ const APP_TABS: Array<{
 }> = [
   {
     id: "viewer-draw",
-    label: "시청자 추첨",
+    label: "오리 추첨",
   },
 ];
+
+APP_TABS.push({
+  id: "number-vote",
+  label: "숫자 투표",
+});
 
 APP_TABS.push({
   id: "free-vote-roulette",
@@ -61,6 +75,11 @@ if (ENABLE_DONATION_VOTE_ROULETTE) {
 
 function formatNumber(value: number): string {
   return new Intl.NumberFormat("ko-KR").format(value);
+}
+
+function extractVoteNumber(input: string): number | null {
+  const match = input.match(/^!투표\s*(\d+)/);
+  return match ? Number.parseInt(match[1], 10) : null;
 }
 
 function readStoredChannel(): Channel | null {
@@ -379,6 +398,9 @@ function DrawApp({
             onStopCollecting={stopCollecting}
           />
         ) : null}
+        {activeTab === "number-vote" ? (
+          <NumberVoteTab channelId={channel.channelId} />
+        ) : null}
         {activeTab === "free-vote-roulette" ? (
           <FreeVoteRouletteTab channelId={channel.channelId} />
         ) : null}
@@ -472,7 +494,7 @@ function ViewerDrawTab({
           {screen === "collecting" ? (
             <>
               <button className="primary large" onClick={onRunDraw}>
-                추첨하기
+                오리 추첨
               </button>
               <button className="secondary large" onClick={onStopCollecting}>
                 참여자 모집 종료
@@ -482,7 +504,7 @@ function ViewerDrawTab({
           {screen === "completed" ? (
             <>
               <button className="primary large" onClick={onRunDraw}>
-                추첨하기
+                오리 추첨
               </button>
               <button className="secondary large" onClick={onRestartCollecting}>
                 참여자 다시 모집하기
@@ -608,6 +630,438 @@ function ViewerDrawTab({
             ))}
           </div>
         </section>
+  ) : null}
+    </>
+  );
+}
+
+function NumberVoteTab({ channelId }: { channelId: string }) {
+  const [screen, setScreen] = useState<Screen>("ready");
+  const [voteOptions, setVoteOptions] = useState<NumberVoteOption[]>([
+    { id: 0, name: "", voters: [] },
+    { id: 1, name: "", voters: [] },
+  ]);
+  const [timerEnabled, setTimerEnabled] = useState(false);
+  const [timerMinutes, setTimerMinutes] = useState(1);
+  const [remainingSeconds, setRemainingSeconds] = useState<number | null>(null);
+  const [chatStatus, setChatStatus] = useState<ChatStatus>("idle");
+  const [notice, setNotice] = useState("");
+  const [hidden, setHidden] = useState(false);
+  const [sortByCount, setSortByCount] = useState(false);
+  const [selectedOptionId, setSelectedOptionId] = useState<number | null>(null);
+  const [drawResult, setDrawResult] = useState<DrawResult | null>(null);
+  const [slotOpen, setSlotOpen] = useState(false);
+  const voteBufferRef = useRef<NumberVoteOption[]>(voteOptions);
+  const viewerVoteRef = useRef(new Map<string, number>());
+  const flushTimeoutRef = useRef<number | null>(null);
+  const connectionRef = useRef<ChatConnection | null>(null);
+
+  function flushVotes() {
+    if (flushTimeoutRef.current !== null) {
+      window.clearTimeout(flushTimeoutRef.current);
+      flushTimeoutRef.current = null;
+    }
+    setVoteOptions(voteBufferRef.current.map((option) => ({ ...option })));
+  }
+
+  function scheduleVoteFlush() {
+    if (flushTimeoutRef.current !== null) return;
+    flushTimeoutRef.current = window.setTimeout(flushVotes, 120);
+  }
+
+  function disconnect() {
+    connectionRef.current?.disconnect();
+    connectionRef.current = null;
+    setChatStatus("idle");
+  }
+
+  function addVote(viewer: Viewer, message: string) {
+    const voteNumber = extractVoteNumber(message);
+    if (!voteNumber || voteNumber < 1 || voteNumber > voteBufferRef.current.length) {
+      return;
+    }
+
+    const nextOptionId = voteNumber - 1;
+    const previousOptionId = viewerVoteRef.current.get(viewer.userIdHash);
+    voteBufferRef.current = voteBufferRef.current.map((option) => ({
+      ...option,
+      voters:
+        previousOptionId === option.id
+          ? option.voters.filter(
+              (voter) => voter.userIdHash !== viewer.userIdHash
+            )
+          : option.voters,
+    }));
+
+    voteBufferRef.current = voteBufferRef.current.map((option) =>
+      option.id === nextOptionId
+        ? {
+            ...option,
+            voters: [
+              ...option.voters.filter(
+                (voter) => voter.userIdHash !== viewer.userIdHash
+              ),
+              viewer,
+            ],
+          }
+        : option
+    );
+    viewerVoteRef.current.set(viewer.userIdHash, nextOptionId);
+    setNotice("");
+    scheduleVoteFlush();
+  }
+
+  async function startVoting() {
+    const normalizedOptions = voteOptions.map((option, index) => ({
+      id: index,
+      name: option.name.trim(),
+      voters: [],
+    }));
+
+    if (normalizedOptions.length === 0) {
+      setNotice("투표 항목을 1개 이상 만들어주세요.");
+      return;
+    }
+
+    voteBufferRef.current = normalizedOptions;
+    viewerVoteRef.current = new Map();
+    setVoteOptions(normalizedOptions);
+    setSelectedOptionId(null);
+    setDrawResult(null);
+    setNotice("");
+    setChatStatus("connecting");
+    setScreen("collecting");
+    setRemainingSeconds(timerEnabled ? timerMinutes * 60 : null);
+
+    try {
+      connectionRef.current = await connectChat(
+        channelId,
+        addVote,
+        (status) => setChatStatus(status)
+      );
+    } catch {
+      setChatStatus("error");
+      setNotice("채팅 연결에 실패했습니다. 방송 상태를 확인한 뒤 다시 시작해주세요.");
+    }
+  }
+
+  function stopVoting() {
+    disconnect();
+    flushVotes();
+    setRemainingSeconds(null);
+    setScreen("completed");
+  }
+
+  async function restartVoting() {
+    disconnect();
+    await startVoting();
+  }
+
+  function resetVoting() {
+    disconnect();
+    viewerVoteRef.current = new Map();
+    voteBufferRef.current = voteOptions.map((option, index) => ({
+      id: index,
+      name: option.name,
+      voters: [],
+    }));
+    setVoteOptions(voteBufferRef.current);
+    setSelectedOptionId(null);
+    setDrawResult(null);
+    setRemainingSeconds(null);
+    setScreen("ready");
+    setChatStatus("idle");
+    setNotice("");
+  }
+
+  function updateOptionName(index: number, name: string) {
+    setVoteOptions((current) =>
+      current.map((option, optionIndex) =>
+        optionIndex === index ? { ...option, name } : option
+      )
+    );
+  }
+
+  function addOption() {
+    setVoteOptions((current) => [
+      ...current,
+      { id: current.length, name: "", voters: [] },
+    ]);
+  }
+
+  function removeOption(index: number) {
+    setVoteOptions((current) =>
+      current
+        .filter((_, optionIndex) => optionIndex !== index)
+        .map((option, optionIndex) => ({ ...option, id: optionIndex }))
+    );
+    setSelectedOptionId((current) => (current === index ? null : current));
+  }
+
+  function drawFromOption(option: NumberVoteOption) {
+    try {
+      const nextResult = drawViewer(option.voters, [], {
+        subscriberOnly: false,
+        excludePreviousWinners: false,
+      });
+      setDrawResult(nextResult);
+      setSlotOpen(true);
+      setNotice("");
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "추첨에 실패했습니다.");
+    }
+  }
+
+  useEffect(() => {
+    if (remainingSeconds === null || screen !== "collecting") return;
+    if (remainingSeconds <= 0) {
+      stopVoting();
+      return;
+    }
+
+    const timer = window.setTimeout(
+      () => setRemainingSeconds((current) => (current ?? 1) - 1),
+      1_000
+    );
+    return () => window.clearTimeout(timer);
+  }, [remainingSeconds, screen]);
+
+  useEffect(() => {
+    return () => {
+      connectionRef.current?.disconnect();
+      if (flushTimeoutRef.current !== null) {
+        window.clearTimeout(flushTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  const totalVotes = voteOptions.reduce(
+    (sum, option) => sum + option.voters.length,
+    0
+  );
+  const remainingTimeText = useMemo(() => {
+    if (remainingSeconds === null) return "";
+
+    const minutes = Math.floor(remainingSeconds / 60);
+    const seconds = remainingSeconds % 60;
+
+    return `${minutes}:${seconds.toString().padStart(2, "0")}`;
+  }, [remainingSeconds]);
+  const displayedOptions = useMemo(
+    () =>
+      [...voteOptions].sort((left, right) =>
+        sortByCount ? right.voters.length - left.voters.length : left.id - right.id
+      ),
+    [sortByCount, voteOptions]
+  );
+  const selectedOption =
+    voteOptions.find((option) => option.id === selectedOptionId) ?? null;
+
+  return (
+    <>
+      <section className="toolbar card">
+        <div className="toolbar-buttons">
+          {screen === "ready" ? (
+            <button className="primary large" onClick={startVoting}>
+              투표 시작
+            </button>
+          ) : null}
+          {screen === "collecting" ? (
+            <button className="secondary large" onClick={stopVoting}>
+              투표 종료
+            </button>
+          ) : null}
+          {screen === "completed" ? (
+            <>
+              <button className="primary large" onClick={restartVoting}>
+                투표 다시 시작
+              </button>
+              <button className="secondary large" onClick={resetVoting}>
+                항목 수정하기
+              </button>
+            </>
+          ) : null}
+        </div>
+
+        <div className="option-grid">
+          <div className="timer-option">
+            <Toggle
+              label="타이머 사용하기"
+              checked={timerEnabled}
+              onChange={() => setTimerEnabled((enabled) => !enabled)}
+            />
+            {timerEnabled ? (
+              <label>
+                <input
+                  type="number"
+                  inputMode="numeric"
+                  min="1"
+                  step="1"
+                  value={timerMinutes}
+                  onChange={(event) => {
+                    const value = Math.floor(Number(event.target.value));
+                    setTimerMinutes(
+                      Number.isFinite(value) && value > 0 ? value : 1
+                    );
+                  }}
+                  onKeyDown={(event) => {
+                    if ([".", ",", "e", "E", "+", "-"].includes(event.key)) {
+                      event.preventDefault();
+                    }
+                  }}
+                />
+                <span>분</span>
+              </label>
+            ) : null}
+          </div>
+          {screen !== "ready" ? (
+            <>
+              <Toggle
+                label="투표 내용 가리기"
+                checked={hidden}
+                onChange={() => setHidden((enabled) => !enabled)}
+              />
+              <Toggle
+                label="투표수 높은 순"
+                checked={sortByCount}
+                onChange={() => setSortByCount((enabled) => !enabled)}
+              />
+            </>
+          ) : null}
+        </div>
+      </section>
+
+      {remainingSeconds !== null ? (
+        <div className="timer">{remainingTimeText}</div>
+      ) : null}
+
+      {notice ? <p className="notice">{notice}</p> : null}
+
+      {screen === "ready" ? (
+        <section className="card number-vote-setup">
+          <div className="section-title">
+            <div>
+              <h2>투표 항목</h2>
+              <p className="muted">
+                시청자는 채팅 맨 앞에 !투표1 또는 !투표 1처럼 입력해서 투표합니다.
+              </p>
+            </div>
+            <span className="status">{voteOptions.length}개</span>
+          </div>
+          <div className="number-vote-edit-list">
+            {voteOptions.map((option, index) => (
+              <div className="number-vote-edit-item" key={option.id}>
+                <strong>!투표{index + 1}</strong>
+                <input
+                  value={option.name}
+                  onChange={(event) => updateOptionName(index, event.target.value)}
+                  placeholder="투표 이름"
+                />
+                <button
+                  className="secondary"
+                  onClick={() => removeOption(index)}
+                  disabled={voteOptions.length <= 1}
+                >
+                  삭제
+                </button>
+              </div>
+            ))}
+            <button className="secondary large" onClick={addOption}>
+              항목 추가
+            </button>
+          </div>
+        </section>
+      ) : (
+        <section className="card number-vote-card">
+          <div className="section-title">
+            <div>
+              <h2>숫자 투표 현황</h2>
+              <p className="muted">
+                투표율 바를 클릭하면 투표자 목록과 항목별 추첨을 볼 수 있습니다.
+              </p>
+            </div>
+            <div className="number-vote-title-status">
+              <Status status={chatStatus} />
+              <span className="status">총 {totalVotes}표</span>
+            </div>
+          </div>
+          <div className="number-vote-layout">
+            <div className="number-vote-list">
+              {displayedOptions.map((option) => {
+                const percent =
+                  totalVotes > 0 ? (option.voters.length / totalVotes) * 100 : 0;
+
+                return (
+                  <button
+                    className={`number-vote-item ${
+                      selectedOptionId === option.id ? "active" : ""
+                    }`}
+                    key={option.id}
+                    onClick={() =>
+                      setSelectedOptionId((current) =>
+                        current === option.id ? null : option.id
+                      )
+                    }
+                  >
+                    <span className="number-vote-item-top">
+                      <b>!투표{option.id + 1}</b>
+                      <strong>
+                        {hidden ? "투표 내용이 가려졌습니다" : option.name || "이름 없음"}
+                      </strong>
+                      <em>{option.voters.length}표</em>
+                    </span>
+                    <span className="number-vote-bar">
+                      <i style={{ width: `${percent}%` }} />
+                    </span>
+                    <span className="small muted">{percent.toFixed(1)}%</span>
+                  </button>
+                );
+              })}
+            </div>
+            <aside className="number-vote-detail">
+              {selectedOption ? (
+                <>
+                  <div className="number-vote-detail-head">
+                    <div>
+                      <p className="eyebrow">!투표{selectedOption.id + 1}</p>
+                      <h2>
+                        {hidden
+                          ? "투표 내용이 가려졌습니다"
+                          : selectedOption.name || "이름 없음"}
+                      </h2>
+                    </div>
+                    <button
+                      className="primary"
+                      onClick={() => drawFromOption(selectedOption)}
+                    >
+                      이 항목에서 추첨
+                    </button>
+                  </div>
+                  <div className="number-vote-voters">
+                    {selectedOption.voters.length === 0 ? (
+                      <p className="muted">아직 투표자가 없습니다.</p>
+                    ) : (
+                      selectedOption.voters.map((viewer) => (
+                        <ViewerChip key={viewer.userIdHash} viewer={viewer} />
+                      ))
+                    )}
+                  </div>
+                </>
+              ) : (
+                <p className="empty">투표 항목을 클릭하면 상세 정보가 표시됩니다.</p>
+              )}
+            </aside>
+          </div>
+        </section>
+      )}
+
+      {slotOpen && drawResult ? (
+        <SlotModal
+          channelId={channelId}
+          result={drawResult}
+          ttsSettings={{ enabled: false }}
+          onClose={() => setSlotOpen(false)}
+        />
       ) : null}
     </>
   );
