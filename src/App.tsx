@@ -139,7 +139,7 @@ function ChannelRegistration({
   return (
     <main className="registration page">
       <section className="registration-card">
-        <div className="brand-mark">F</div>
+        <img className="brand-mark" src="/nyami-logo.png" alt="Nyami" />
         <p className="eyebrow">FAIR CHZZK DRAW</p>
         <h1>안녕하세요!<br />처음 오셨나요?</h1>
         <p className="muted">
