@@ -169,16 +169,16 @@ export function CharacterStage({
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     mountElement.appendChild(renderer.domElement);
 
-    const hemiLight = new THREE.HemisphereLight(0xffffff, 0xa8c5d7, 1.8);
+    const hemiLight = new THREE.HemisphereLight(0xffffff, 0xa8c5d7, 1.44);
     scene.add(hemiLight);
 
-    const keyLight = new THREE.DirectionalLight(0xffffff, 2.4);
+    const keyLight = new THREE.DirectionalLight(0xffffff, 1.92);
     keyLight.position.set(6, 10, 8);
     keyLight.castShadow = true;
     keyLight.shadow.mapSize.set(2048, 2048);
     scene.add(keyLight);
 
-    const fillLight = new THREE.DirectionalLight(0x9fcfff, 1.2);
+    const fillLight = new THREE.DirectionalLight(0x9fcfff, 0.96);
     fillLight.position.set(-6, 5, -4);
     scene.add(fillLight);
 
@@ -186,7 +186,7 @@ export function CharacterStage({
       new THREE.PlaneGeometry(42, 42),
       new THREE.MeshStandardMaterial({
         map: createMarbleTexture(),
-        color: 0xf2f7fb,
+        color: 0xcbd5df,
         roughness: 0.34,
         metalness: 0.03,
       })
@@ -853,9 +853,9 @@ function createMarbleTexture() {
   if (!context) return null;
 
   const gradient = context.createLinearGradient(0, 0, size, size);
-  gradient.addColorStop(0, "#f8fbff");
-  gradient.addColorStop(0.5, "#dfe9f2");
-  gradient.addColorStop(1, "#ffffff");
+  gradient.addColorStop(0, "#d9e0e8");
+  gradient.addColorStop(0.5, "#b8c4cf");
+  gradient.addColorStop(1, "#e2e7ed");
   context.fillStyle = gradient;
   context.fillRect(0, 0, size, size);
 
